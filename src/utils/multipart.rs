@@ -1,52 +1,66 @@
-use actix_web::{dev::Payload, error, multipart, Error};
-use futures::{compat::Stream01CompatExt, StreamExt};
+use bytes::Buf;
+use serde::de::DeserializeOwned;
 
-use crate::sources::SourceConfig;
-use crate::types::RequestOptions;
+use crate::utils::http::BadRequest;
 
 const MAX_JSON_SIZE: usize = 1_000_000;
 
-pub async fn read_multipart_data(
-    field: multipart::Field<Payload>,
-    max_size: usize,
-) -> Result<Vec<u8>, Error> {
+/*
+TODO: Streaming implementation. Doesn't give much due to impl Buf copy
+
+type BS = Box<dyn Stream<Item = Result<Bytes, warp::Error>> + Unpin>;
+type MS = MultipartStream<BS, warp::Error>;
+
+fn create_multipart<S, B>(mime: Mime, body: S) -> MS
+where
+    S: Stream<Item = Result<B, warp::Error>> + Unpin + 'static,
+    B: Buf,
+{
+    let boundary = mime.get_param("boundary").map(|v| v.to_string()).unwrap();
+
+    MultipartStream::new(
+        boundary,
+        Box::new(body.map_ok(|mut buf| buf.copy_to_bytes(buf.remaining()))),
+    )
+}
+
+fn multipart() -> impl Filter<Extract = (MS,), Error = Rejection> + Clone {
+    warp::any()
+        .and(warp::header::<Mime>("content-type"))
+        .and(warp::body::stream())
+        .map(create_multipart)
+}
+
+async fn read_multipart_file2(
+    field: MultipartField<BS, warp::Error>,
+) -> Result<Vec<u8>, warp::Error> {
     let mut body = Vec::with_capacity(512);
-    let mut stream = field.compat();
+    while let Some(bytes) = field.try_next().await? {
+        body.extend_from_slice(&bytes);
+    }
+    Ok(body)
+}
+*/
 
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-
-        if (body.len() + chunk.len()) > max_size {
-            return Err(error::ErrorBadRequest("payload too large"));
+pub async fn read_multipart_part(mut part: warp::multipart::Part) -> Result<Vec<u8>, BadRequest> {
+    let mut vec = Vec::new();
+    while let Some(result) = part.data().await {
+        let mut buf = result?;
+        while buf.has_remaining() {
+            let chunk = buf.chunk();
+            vec.extend_from_slice(chunk);
+            let len = chunk.len();
+            buf.advance(len);
         }
-
-        body.extend_from_slice(&chunk);
     }
-
-    Ok(body)
+    Ok(vec)
 }
 
-pub async fn read_multipart_file(field: multipart::Field<Payload>) -> Result<Vec<u8>, Error> {
-    let mut body = Vec::with_capacity(512);
-    let mut stream = field.compat();
-
-    while let Some(chunk) = stream.next().await {
-        body.extend_from_slice(&chunk?);
-    }
-
-    Ok(body)
-}
-
-pub async fn read_multipart_sources(
-    field: multipart::Field<Payload>,
-) -> Result<Vec<SourceConfig>, Error> {
-    let data = read_multipart_data(field, MAX_JSON_SIZE).await?;
-    Ok(serde_json::from_slice(&data)?)
-}
-
-pub async fn read_multipart_request_options(
-    field: multipart::Field<Payload>,
-) -> Result<RequestOptions, Error> {
-    let data = read_multipart_data(field, MAX_JSON_SIZE).await?;
+pub async fn read_multipart_json<T>(part: warp::multipart::Part) -> Result<T, BadRequest>
+where
+    T: DeserializeOwned,
+{
+    // TODO: MAX_JSON_SIZE
+    let data = read_multipart_part(part).await?;
     Ok(serde_json::from_slice(&data)?)
 }

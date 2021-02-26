@@ -43,6 +43,14 @@ impl fmt::Display for RequestId {
     }
 }
 
+impl FromStr for RequestId {
+    type Err = <Uuid as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Uuid::from_str(s).map(Self)
+    }
+}
+
 impl<'de> Deserialize<'de> for RequestId {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

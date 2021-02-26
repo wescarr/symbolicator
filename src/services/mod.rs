@@ -26,13 +26,14 @@
 //!  - Services use the HTTP server's runtime.
 //!  - The downloader uses the `tokio 1` runtime internally.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
 use crate::cache::Caches;
 use crate::config::Config;
-use crate::utils::futures::ThreadPool;
+use crate::utils::futures::{SpawnHandle, ThreadPool};
 
 pub mod cacher;
 pub mod cficaches;
@@ -58,6 +59,8 @@ pub struct Service {
     config: Arc<Config>,
     /// The download service.
     downloader: Arc<DownloadService>,
+    /// Tokio 0.1 runtime to run compat services.
+    compat_pool: ThreadPool,
 }
 
 impl Service {
@@ -91,6 +94,7 @@ impl Service {
             objects,
             config,
             downloader,
+            compat_pool: ThreadPool::new(),
         })
     }
 
@@ -104,5 +108,19 @@ impl Service {
 
     pub fn config(&self) -> Arc<Config> {
         self.config.clone()
+    }
+
+    /// Return the compatibility tokio 0.1 runtime.
+    pub fn compat(&self) -> ThreadPool {
+        self.compat_pool.clone()
+    }
+
+    /// Spawn a future onto the compatibility tokio 0.1 runtime.
+    pub fn spawn_compat<F>(&self, future: F) -> SpawnHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.compat_pool.spawn_handle(future)
     }
 }

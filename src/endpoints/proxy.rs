@@ -1,17 +1,18 @@
-use std::io::Cursor;
+use std::convert::Infallible;
 use std::sync::Arc;
 
-use actix_web::{http::Method, pred, App, HttpRequest, HttpResponse, Path, State};
-use failure::{Error, ResultExt};
-use futures01::Stream;
-use tokio01::codec::{BytesCodec, FramedRead};
+use http::InternalServerError;
+use warp::{http::HeaderValue, hyper::Body, reply::Response, Filter, Rejection, Reply};
 
 use crate::services::objects::{FindObject, ObjectHandle, ObjectPurpose};
 use crate::services::Service;
 use crate::types::Scope;
-use crate::utils::paths::parse_symstore_path;
+use crate::utils::{http, paths::parse_symstore_path};
 
-async fn load_object(state: &Service, path: &str) -> Result<Option<Arc<ObjectHandle>>, Error> {
+async fn load_object(
+    state: &Service,
+    path: &str,
+) -> Result<Option<Arc<ObjectHandle>>, InternalServerError> {
     let config = state.config();
     if !config.symstore_proxy {
         return Ok(None);
@@ -34,7 +35,9 @@ async fn load_object(state: &Service, path: &str) -> Result<Option<Arc<ObjectHan
             purpose: ObjectPurpose::Debug,
         })
         .await
-        .context("failed to download object")?;
+        // TODO(ja): Bring back contexts, figure out error handling
+        // .context("failed to download object")?;
+        ?;
 
     let object_meta = match found_object.meta {
         Some(meta) => meta,
@@ -45,7 +48,8 @@ async fn load_object(state: &Service, path: &str) -> Result<Option<Arc<ObjectHan
         .objects()
         .fetch(object_meta)
         .await
-        .context("failed to download object")?;
+        // .context("failed to download object")?;
+        ?;
 
     if object_handle.has_object() {
         Ok(Some(object_handle))
@@ -55,33 +59,49 @@ async fn load_object(state: &Service, path: &str) -> Result<Option<Arc<ObjectHan
 }
 
 async fn proxy_symstore_request(
-    state: State<Service>,
-    request: HttpRequest<Service>,
-    path: Path<(String,)>,
-) -> Result<HttpResponse, Error> {
-    let object_handle = match load_object(&state, &path.0).await? {
-        Some(handle) => handle,
-        None => return Ok(HttpResponse::NotFound().finish()),
+    method: warp::http::Method,
+    path: warp::path::Tail,
+    service: Service,
+) -> Result<Response, Rejection> {
+    let is_head = match method {
+        warp::http::Method::HEAD => true,
+        warp::http::Method::GET => false,
+        _ => return Ok(warp::http::StatusCode::METHOD_NOT_ALLOWED.into_response()),
     };
 
-    let mut response = HttpResponse::Ok();
-    response
-        .content_length(object_handle.len() as u64)
-        .header("content-type", "application/octet-stream");
+    let object_handle = match load_object(&service, path.as_str()).await? {
+        Some(handle) => handle,
+        // TODO: This shouldn't be a rejection
+        // https://github.com/seanmonstar/warp/issues/712#issuecomment-697031645
+        None => return Err(warp::reject::not_found()),
+    };
 
-    if request.method() == Method::HEAD {
-        return Ok(response.finish());
-    }
+    let len = object_handle.len();
+    let mut response = if is_head {
+        Response::new(Body::empty())
+    } else {
+        // TODO(ja): Framed read via tokio-util?
+        // let bytes = Cursor::new(object_handle.data());
+        // let async_bytes = FramedRead::new(bytes, BytesCodec::new()).map(|bytes| bytes.freeze());
+        Response::new(Body::wrap_stream(futures::stream::once(async move {
+            Ok::<_, Infallible>(object_handle.data().to_vec())
+        })))
+    };
 
-    let bytes = Cursor::new(object_handle.data());
-    let async_bytes = FramedRead::new(bytes, BytesCodec::new()).map(|bytes| bytes.freeze());
-    Ok(response.streaming(async_bytes))
+    let headers = response.headers_mut();
+    headers.insert("content-length", len.into());
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("application/octet-stream"),
+    );
+
+    Ok(response)
 }
 
-pub fn configure(app: App<Service>) -> App<Service> {
-    app.resource("/symbols/{path:.+}", |r| {
-        r.route()
-            .filter(pred::Any(pred::Get()).or(pred::Head()))
-            .with_async(compat_handler!(proxy_symstore_request, s, r, p));
-    })
+pub fn filter(service: Service) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path("requests")
+        .and(warp::method())
+        .and(warp::path::tail())
+        .and(http::with(service))
+        .and_then(proxy_symstore_request)
 }

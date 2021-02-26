@@ -1,24 +1,25 @@
-use actix_web::{error, App, Error, Json, Query, State};
+use std::convert::Infallible;
+
 use serde::Deserialize;
+use warp::reply::Response;
+use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 use crate::services::symbolication::SymbolicateStacktraces;
 use crate::services::Service;
 use crate::sources::SourceConfig;
-use crate::types::{
-    RawObjectInfo, RawStacktrace, RequestOptions, Scope, Signal, SymbolicationResponse,
-};
-use crate::utils::sentry::ConfigureScope;
+use crate::types::{RawObjectInfo, RawStacktrace, RequestOptions, Scope, Signal};
+use crate::utils::{http, sentry::ConfigureScope};
 
 /// Query parameters of the symbolication request.
 #[derive(Deserialize)]
-pub struct SymbolicationRequestQueryParams {
+pub struct SymbolicateParams {
     #[serde(default)]
     pub timeout: Option<u64>,
     #[serde(default)]
     pub scope: Scope,
 }
 
-impl ConfigureScope for SymbolicationRequestQueryParams {
+impl ConfigureScope for SymbolicateParams {
     fn to_scope(&self, scope: &mut sentry::Scope) {
         scope.set_tag("request.scope", &self.scope);
         if let Some(timeout) = self.timeout {
@@ -31,7 +32,7 @@ impl ConfigureScope for SymbolicationRequestQueryParams {
 
 /// JSON body of the symbolication request.
 #[derive(Deserialize)]
-struct SymbolicationRequestBody {
+struct SymbolicateBody {
     #[serde(default)]
     pub signal: Option<Signal>,
     #[serde(default)]
@@ -44,47 +45,45 @@ struct SymbolicationRequestBody {
     pub options: RequestOptions,
 }
 
-async fn symbolicate_frames(
-    state: State<Service>,
-    params: Query<SymbolicationRequestQueryParams>,
-    body: Json<SymbolicationRequestBody>,
-) -> Result<Json<SymbolicationResponse>, Error> {
+async fn symbolicate(
+    params: SymbolicateParams,
+    body: SymbolicateBody,
+    service: Service,
+) -> Result<Response, Infallible> {
     sentry::start_session();
-
-    let params = params.into_inner();
     params.configure_scope();
 
-    let body = body.into_inner();
-    let sources = match body.sources {
-        Some(sources) => sources.into(),
-        None => state.config().default_sources(),
-    };
+    let response_opt = service.compat().spawn_handle(async move {
+        let sources = match body.sources {
+            Some(sources) => sources.into(),
+            None => service.config().default_sources(),
+        };
 
-    let symbolication = state.symbolication();
-    let request_id = symbolication.symbolicate_stacktraces(SymbolicateStacktraces {
-        scope: params.scope,
-        signal: body.signal,
-        sources,
-        stacktraces: body.stacktraces,
-        modules: body.modules.into_iter().map(From::from).collect(),
-        options: body.options,
+        let symbolication = service.symbolication();
+        let request_id = symbolication.symbolicate_stacktraces(SymbolicateStacktraces {
+            scope: params.scope,
+            signal: body.signal,
+            sources,
+            stacktraces: body.stacktraces,
+            modules: body.modules.into_iter().map(From::from).collect(),
+            options: body.options,
+        });
+
+        symbolication.get_response(request_id, params.timeout).await
     });
 
-    match symbolication.get_response(request_id, params.timeout).await {
-        Some(response) => Ok(Json(response)),
-        None => Err(error::ErrorInternalServerError(
-            "symbolication request did not start",
-        )),
-    }
+    Ok(match response_opt.await {
+        Ok(Some(response)) => warp::reply::json(&response).into_response(),
+        _ => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    })
 }
 
-pub fn configure(app: App<Service>) -> App<Service> {
-    app.resource("/symbolicate", |r| {
-        r.post().with_async_config(
-            compat_handler!(symbolicate_frames, s, p, b),
-            |(_hub, _state, _params, body)| {
-                body.limit(5_000_000);
-            },
-        );
-    })
+pub fn filter(service: Service) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("symbolicate")
+        .and(warp::post())
+        .and(warp::query())
+        .and(warp::body::content_length_limit(5_000_000))
+        .and(warp::body::json())
+        .and(http::with(service))
+        .and_then(symbolicate)
 }

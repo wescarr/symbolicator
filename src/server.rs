@@ -1,20 +1,18 @@
-use actix_web::{server::HttpServer, App};
+use std::net::SocketAddr;
+
 use anyhow::{Context, Result};
+use warp::{Filter, Rejection, Reply};
 
 use crate::config::Config;
 use crate::endpoints;
 use crate::middlewares;
 use crate::services::Service;
-use crate::utils::sentry::SentryMiddleware;
 
-/// Creates the Actix web application with all middlewares.
 #[inline]
-pub fn create_app(state: Service) -> App<Service> {
-    App::with_state(state)
-        .middleware(middlewares::Metrics)
-        .middleware(middlewares::ErrorHandlers)
-        .middleware(SentryMiddleware::new())
-        .configure(endpoints::configure)
+pub fn filter(service: Service) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    endpoints::filter(service)
+        .with(warp::log(module_path!()))
+        .with(warp::wrap_fn(middlewares::metrics))
 }
 
 /// Starts all actors and HTTP server based on loaded config.
@@ -24,7 +22,6 @@ pub fn run(config: Config) -> Result<()> {
     metric!(counter("server.starting") += 1);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
         .thread_name("symbolicator")
         .enable_all()
         .build()
@@ -37,10 +34,9 @@ pub fn run(config: Config) -> Result<()> {
     let service = Service::create(config).context("failed to create service state")?;
 
     log::info!("Starting http server: {}", bind);
-    HttpServer::new(move || create_app(service.clone()))
-        .bind(&bind)
-        .context("failed to bind to the port")?
-        .run();
+    let socket = bind.parse::<SocketAddr>()?;
+    let server = warp::serve(filter(service)).bind(socket);
+    runtime.block_on(server);
     log::info!("System shutdown complete");
 
     Ok(())

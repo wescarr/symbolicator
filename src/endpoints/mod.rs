@@ -1,4 +1,4 @@
-use actix_web::App;
+use warp::{Filter, Rejection, Reply};
 
 use crate::services::Service;
 
@@ -9,12 +9,11 @@ mod proxy;
 mod requests;
 mod symbolicate;
 
-/// Adds all endpoint routes to the app.
-pub fn configure(app: App<Service>) -> App<Service> {
-    app.configure(applecrashreport::configure)
-        .configure(healthcheck::configure)
-        .configure(minidump::configure)
-        .configure(proxy::configure)
-        .configure(requests::configure)
-        .configure(symbolicate::configure)
+pub fn filter(service: Service) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    healthcheck::filter()
+        .or(symbolicate::filter(service.clone()))
+        .or(minidump::filter(service.clone()))
+        .or(applecrashreport::filter(service.clone()))
+        .or(requests::filter(service.clone()))
+        .or(proxy::filter(service))
 }

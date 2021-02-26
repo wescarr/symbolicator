@@ -10,7 +10,7 @@ macro_rules! tryf {
                 use ::std::boxed::Box;
                 use ::std::pin::Pin;
                 return Box::pin(::futures::future::err(::std::convert::From::from(e)))
-                    as Pin<Box<dyn ::futures::future::Future<Output = _>>>;
+                    as Pin<Box<dyn ::futures::future::Future<Output = _> + Send>>;
             }
         }
     };
@@ -41,18 +41,4 @@ macro_rules! clone {
             move |$($p : $t),*| $body
         }
     );
-}
-
-macro_rules! compat_handler {
-    ($func:ident , $($param:ident),*) => {{
-        use ::futures::{FutureExt, TryFutureExt};
-        use ::sentry::SentryFutureExt;
-
-        |__hub: crate::utils::sentry::ActixHub, $($param),*| {
-            $func ( $($param),* )
-                .bind_hub(__hub)
-                .boxed_local()
-                .compat()
-        }
-    }};
 }

@@ -8,7 +8,6 @@ include = ["src/**/*", "Cargo.toml", "README.md"]
 readme = "README.md"
 
 [dependencies]
-actix-web = { version = "0.7.19", features = ["tls"], default-features = false }
 anyhow = "1.0.38"
 apple-crash-report-parser = "0.4.2"
 backtrace = "0.3.55"
@@ -31,6 +30,8 @@ jsonwebtoken = "7.2.0"
 lazy_static = "1.4.0"
 log = { version = "0.4.13", features = ["serde"] }
 lru = "0.6.3"
+# mime = "0.3.16"
+# mpart-async = { version = "0.5.0", default-features = false }  # TODO: use instead of warp::multipart?
 num_cpus = "1.13.0"
 parking_lot = "0.11.1"
 pretty_env_logger = "0.4.0"
@@ -48,10 +49,11 @@ structopt = "0.3.21"
 symbolic = { git = "https://github.com/getsentry/symbolic", branch = "fix/demangle-fixes", features = ["common-serde", "demangle", "minidump-serde", "symcache"] }
 tempfile = "3.2.0"
 thiserror = "1.0.23"
-tokio = { version = "1.0.2", features = ["rt", "macros", "fs"] }
+tokio = { version = "1.0.2", features = ["rt-multi-thread", "macros", "fs"] }
 tokio01 = { version = "0.1.22", package = "tokio" }
 url = { version = "2.2.0", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["v4", "serde"] }
+warp = { version = "0.3.0", features = ["compression", "multipart"] }
 zstd = "0.6.0"
 
 [dev-dependencies]

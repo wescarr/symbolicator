@@ -215,7 +215,7 @@ impl CacheItemRequest for FetchFileDataRequest {
         };
 
         let result = future
-            .boxed_local()
+            .boxed()
             .map_err(|e| {
                 sentry::capture_error(&e);
                 e

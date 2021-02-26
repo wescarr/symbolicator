@@ -1,6 +1,11 @@
+use std::convert::Infallible;
+use std::error::Error;
+use std::fmt;
 use std::net::IpAddr;
 
 use ipnetwork::Ipv4Network;
+use serde::{Deserialize, Serialize};
+use warp::Filter;
 
 use crate::config::Config;
 
@@ -45,6 +50,89 @@ pub fn create_client(config: &Config, trusted: bool) -> reqwest::Client {
     }
 
     builder.build().unwrap()
+}
+
+#[derive(Debug)]
+pub struct ServiceUnavailable;
+
+impl warp::reject::Reject for ServiceUnavailable {}
+
+/// TODO(ja): Doc this.
+pub fn with<T: Clone + Send>(t: T) -> impl Filter<Extract = (T,), Error = Infallible> + Clone {
+    warp::any().map(move || t.clone())
+}
+
+// #[derive(Debug)]
+// pub struct InternalServerError {
+//     inner: Box<dyn Error + Send + Sync + 'static>,
+// }
+
+// impl fmt::Display for InternalServerError {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         self.inner.fmt(f)
+//     }
+// }
+
+// impl<E> From<E> for InternalServerError
+// where
+//     E: Error + Send + Sync + 'static,
+// {
+//     fn from(error: E) -> Self {
+//         Self {
+//             inner: Box::new(error),
+//         }
+//     }
+// }
+
+// impl warp::reject::Reject for InternalServerError {}
+
+// #[derive(Debug)]
+// pub struct BadRequest {
+//     inner: Box<dyn Error + Send + Sync + 'static>,
+// }
+
+// impl BadRequest {
+//     pub fn msg(message: &str) -> Self {
+//         // Self::from(anyhow::Error::msg(message))
+//         todo!()
+//     }
+// }
+
+// impl fmt::Display for BadRequest {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         self.inner.fmt(f)
+//     }
+// }
+
+// impl<E> From<E> for BadRequest
+// where
+//     E: Error + Send + Sync + 'static,
+// {
+//     fn from(error: E) -> Self {
+//         Self {
+//             inner: Box::new(error),
+//         }
+//     }
+// }
+
+// impl warp::reject::Reject for BadRequest {}
+
+/// An error response from an api.
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub struct ApiErrorResponse {
+    detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    causes: Option<Vec<String>>,
+}
+
+impl ApiErrorResponse {
+    /// Creates an error response with a detail message
+    pub fn with_detail<S: AsRef<str>>(s: S) -> ApiErrorResponse {
+        ApiErrorResponse {
+            detail: Some(s.as_ref().to_string()),
+            causes: None,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -31,7 +31,6 @@ use crate::sources::{
     SourceFilters, SourceId,
 };
 
-pub use actix_web::test::TestServer;
 pub use tempfile::TempDir;
 
 const SYMBOLS_PATH: &str = "tests/fixtures/symbols";
@@ -145,7 +144,7 @@ impl Server {
     pub fn new<F>(filter: F) -> Self
     where
         F: warp::Filter + Clone + Send + Sync + 'static,
-        F::Extract: warp::reply::Reply,
+        F::Extract: warp::Reply,
         F::Error: IsReject,
     {
         let (socket, future) = warp::serve(filter).bind_ephemeral(([127, 0, 0, 1], 0));

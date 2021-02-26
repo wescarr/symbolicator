@@ -17,7 +17,7 @@ use tokio01::runtime::Runtime as TokioRuntime;
 /// You would mainly use this if you are dealing with a trait methods which deals with
 /// futures.  Trait methods can not be async/await and using this type in their return value
 /// allows to integrate with async await code.
-pub type BoxedFuture<T> = Pin<Box<dyn Future<Output = T>>>;
+pub type BoxedFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 /// Error returned from a [`SpawnHandle`] when the thread pool restarts.
 pub use oneshot::Canceled as RemoteCanceled;
@@ -131,9 +131,12 @@ pub struct Elapsed(());
 ///
 /// This is a compatibility shim for the `tokio` 1.0 `timeout` function signature to run on a
 /// `tokio` 0.1 executor.
-pub async fn timeout_compat<F: Future>(duration: Duration, f: F) -> Result<F::Output, Elapsed> {
+pub async fn timeout_compat<F>(duration: Duration, f: F) -> Result<F::Output, Elapsed>
+where
+    F: Future + Send,
+{
     f.unit_error()
-        .boxed_local()
+        .boxed()
         .compat()
         .timeout(duration)
         .compat()

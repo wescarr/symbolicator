@@ -1,44 +1,64 @@
-use actix_web::{App, Error, HttpResponse, Path, Query, State};
+use std::convert::Infallible;
+
 use serde::Deserialize;
+use warp::{http::StatusCode, reply::Response, Filter, Rejection, Reply};
 
 use crate::services::Service;
 use crate::types::RequestId;
-
-/// Path parameters of the symbolication poll request.
-#[derive(Deserialize)]
-struct PollSymbolicationRequestPath {
-    pub request_id: RequestId,
-}
+use crate::utils::http;
 
 /// Query parameters of the symbolication poll request.
 #[derive(Deserialize)]
-struct PollSymbolicationRequestQueryParams {
+struct PollRequestParams {
     #[serde(default)]
     pub timeout: Option<u64>,
 }
 
 async fn poll_request(
-    state: State<Service>,
-    path: Path<PollSymbolicationRequestPath>,
-    query: Query<PollSymbolicationRequestQueryParams>,
-) -> Result<HttpResponse, Error> {
-    let path = path.into_inner();
-    let query = query.into_inner();
-
-    let response_opt = state
+    request_id: RequestId,
+    params: PollRequestParams,
+    service: Service,
+) -> Result<Response, Infallible> {
+    let response_future = service
         .symbolication()
-        .get_response(path.request_id, query.timeout)
-        .await;
+        .get_response(request_id, params.timeout);
 
-    Ok(match response_opt {
-        Some(response) => HttpResponse::Ok().json(response),
-        None => HttpResponse::NotFound().finish(),
+    Ok(match service.spawn_compat(response_future).await {
+        Ok(Some(response)) => warp::reply::json(&response).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_canceled) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     })
 }
 
-pub fn configure(app: App<Service>) -> App<Service> {
-    app.resource("/requests/{request_id}", |r| {
-        let handler = compat_handler!(poll_request, s, p, q);
-        r.get().with_async(handler);
-    })
+pub fn filter(service: Service) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("requests" / RequestId)
+        .and(warp::get())
+        .and(warp::query())
+        .and(http::with(service))
+        .and_then(poll_request)
+}
+
+#[cfg(test)]
+mod tests {
+    use warp::http::StatusCode;
+    use warp::test::request;
+
+    use crate::config::Config;
+    use crate::services::Service;
+    use crate::types::RequestId;
+
+    #[tokio::test]
+    async fn test_not_found() {
+        let service = Service::create(Config::default()).unwrap();
+        let endpoint = super::filter(service);
+
+        let request_id = RequestId::new(Default::default());
+        let response = request()
+            .method("GET")
+            .path(&format!("/requests/{}", request_id))
+            .reply(&endpoint)
+            .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }
