@@ -18,6 +18,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/symbolicator/build.rs crates/symbolicator/Cargo.toml crates/symbolicator/
 COPY crates/symbolicator-crash/build.rs crates/symbolicator-crash/Cargo.toml crates/symbolicator-crash/
 
+RUN rustup toolchain install nightly
+
 # Build without --locked.
 #
 # CI already builds with --locked so we are sure exactly which
@@ -28,7 +30,8 @@ RUN mkdir -p crates/symbolicator/src \
     && echo "fn main() {}" > crates/symbolicator/src/main.rs \
     && mkdir -p crates/symbolicator-crash/src \
     && echo "pub fn main() {}" > crates/symbolicator-crash/src/lib.rs \
-    && cargo build --release
+    && cargo +nightly run -Z build-std --target x86_64-unknown-linux-gnu \
+    && RUSTFLAGS="-C force-frame-pointers=yes" cargo build --release
 
 COPY crates/symbolicator/src crates/symbolicator/src/
 COPY crates/symbolicator-crash/src crates/symbolicator-crash/src/
